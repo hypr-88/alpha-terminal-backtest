@@ -1,15 +1,16 @@
 '''backtest
-start: 2021-06-26 00:00:00
+start: 2021-01-01 00:00:00
 end: 2021-06-27 00:00:00
 period: 1d
-basePeriod: 1h
-exchanges: [{"eid":"Binance","currency":"BTC_USDT"}]
+basePeriod: 1d
+exchanges: [{"eid":"Binance","currency":"BTC_USDT","stocks":1000000},{"eid":"Binance","currency":"EOS_USDT","stocks":1000000},{"eid":"Binance","currency":"ETH_USDT","stocks":1000000},{"eid":"Binance","currency":"LTC_USDT","stocks":1000000}]
+args: [["name","abcde"]]
 '''
 import pandas as pd
 import numpy as np
 from scipy.stats import rankdata
 import requests
-
+np.random.seed(2021)
 '''
 Notes: s stands for float, v stands for np.ndarray, m stands for np.ndarray
 Definition of 67 functions of operations:
@@ -83,10 +84,8 @@ Definition of 67 functions of operations:
     65. s = rank(s)
     66. s = rankIndustry(s)
     67. s = s - mean(s_in_same_Industry)
-
+    
 '''
-
-
 class Alpha():
     def __init__(self):
         self.symbolList = []
@@ -96,50 +95,46 @@ class Alpha():
         self.predictOPs = []
         self.updateOPs = []
         self.operandsValues = {}
-
+        
         self.extractInput()
         self.simplifyOperations()
-
+        
     def extractInput(self):
         '''request API here and update attribute'''
         url = 'http://54.199.171.116/api/alpha'
-
+        
         payload = {'name': name}
-
+        
         headers = {'Token': 'q0hcdABLUhGAzW3j'}
-
-        response = requests.get(url=url, headers=headers, data=payload).json()
-
+        
+        response = requests.get(url = url, headers = headers, params = payload).json()
+        
         if response['status']:
-            response = response['data'][0]
-            self.symbolList = response['symbolList']
+            response = response['data']
+            self.symbolList = response['symbolList'] 
             self.windowSize = response['window']
             self.nodes = response['nodes']
-            self.setupOPs = response['setupOPs']
-            self.predictOPs = response['predictOPs']
-            self.updateOPs = response['updateOPs']
+            self.setupOPs = response['setupOPs'] 
+            self.predictOPs = response['predictOPs'] 
+            self.updateOPs = response['updateOPs'] 
             self.operandsValues = response['operandsValues']
-
     def simplifyOperations(self):
         self.operations = self.setupOPs + self.predictOPs
-
-
-# def init():
+        
+#def init():
 alpha = Alpha()
 windowSize = alpha.windowSize
 operations = alpha.operations
 operandsValues = alpha.operandsValues
 symbolList = alpha.symbolList
 featuresList = ['open', 'high', 'low', 'close', 'volume', 'EMA5', 'EMA10', 'EMA20', 'EMA30', 'STD5', 'STD10', 'STD20',
-                'STD30']
-initialBalance = exchange.GetAccount()['Balance'] / 4
+                'STD30']  
+initialBalance = exchange.GetAccount()['Balance']/len(symbolList)
 initialStocks = [ex.GetAccount()['Stocks'] for ex in exchanges]
-
 
 def getData(ex):
     df = pd.DataFrame(ex.GetRecords(PERIOD_D1))
     return df
-
 
 def processData(df):
     df.drop('OpenInterest', axis=1, inplace=True)
@@ -154,15 +149,14 @@ def processData(df):
     df['STD10'] = ESTD(df['close'], 10)
     df['STD20'] = ESTD(df['close'], 20)
     df['STD30'] = ESTD(df['close'], 30)
-
+    
     # normalize
     for col in featuresList:
         df[col] /= df[col].max(skipna=True)
-
-    df.dropna(inplace=True)
-
+    
+    df.dropna(inplace = True)
+    
     return df[featuresList]
-
 
 def createWindow(df: pd.DataFrame):
     if len(df.index) < windowSize:
@@ -170,56 +164,50 @@ def createWindow(df: pd.DataFrame):
     x = df.iloc[-windowSize:]
     return np.array(x, dtype=np.float32)
 
-
 def addM0(data):
     for i, symbol in enumerate(symbolList):
         operandsValues['m0'][i] = data[symbol]
-
-
+        
 def predict():
     for operations in alpha.operations:
         executeOperation(operations)
 
-
 def allocateWeights(predictArray: list):
     predictArray = pd.Series(predictArray)
-    longIdx = predictArray.nlargest(noLongShort, keep='first').index.tolist()
-    shortIdx = predictArray.nsmallest(noLongShort, keep='last').index.tolist()
-    weight = 1 / noLongShort
-
+    longIdx = predictArray.nlargest(noLongShort, keep = 'first').index.tolist()
+    shortIdx = predictArray.nsmallest(noLongShort, keep = 'last').index.tolist()
+    weight = 1/noLongShort
+    
     weights = np.zeros(len(predictArray))
-    weights[longIdx] = weight
-    weights[shortIdx] = -weight
-    return weights
-
+    weights[longIdx] = weight 
+    weights[shortIdx] = -weight 
+    return weights 
 
 def getPosition(weights):
     currStocks = [ex.GetAccount()['Stocks'] for ex in exchanges]
     currBuy = [ex.GetTicker()['Buy'] for ex in exchanges]
     currSell = [ex.GetTicker()['Sell'] for ex in exchanges]
-
+    
     targetStocks = initialStocks.copy()
     for i in range(len(symbolList)):
         if weights[i] > 0:
-            targetStocks[i] += initialBalance * weights[i] / currSell[i]
+            targetStocks[i] += initialBalance*weights[i]/currSell[i]
         elif weights[i] < 0:
-            targetStocks[i] += initialBalance * weights[i] / currBuy[i]
+            targetStocks[i] += initialBalance*weights[i]/currBuy[i]
         else:
             targetStocks[i] += 0
-
+    
     transactStocks = [targetStocks[i] - currStocks[i] for i in range(len(symbolList))]
     return transactStocks
-
 
 def setOrder(transactStocks):
     currBuy = [ex.GetTicker()['Buy'] for ex in exchanges]
     currSell = [ex.GetTicker()['Sell'] for ex in exchanges]
     for i, ex in enumerate(exchanges):
         if transactStocks[i] > 0:
-            ex.Buy((currBuy[i] + currSell[i]) / 2, abs(transactStocks[i]))
+            ex.Buy((currBuy[i]+currSell[i])/2, abs(transactStocks[i]))
         elif transactStocks[i] < 0:
-            ex.Sell((currBuy[i] + currSell[i]) / 2, abs(transactStocks[i]))
-
+            ex.Sell((currBuy[i]+currSell[i])/2, abs(transactStocks[i]))
 
 def onTick():
     data = {}
@@ -230,22 +218,29 @@ def onTick():
         dat = createWindow(dat)
         if dat is None:
             return
-        else:
+        else: 
             data[symbol] = dat
-
+    
     addM0(data)
     predict()
     weights = allocateWeights(operandsValues['s1'])
     transactStocks = getPosition(weights)
     setOrder(transactStocks)
-
-
+    
 def main():
     while True:
         onTick()
-        Sleep(86399200)  # sleep for 1 day
+        Sleep(86399200) #sleep for 1 day
 
 
+        
+        
+        
+        
+        
+        
+        
+        
 ######################################################################################################################
 ######################################################################################################################
 ######################################################################################################################
@@ -263,22 +258,18 @@ class inputError(Exception):
 
     def __str__(self):
         return self.message
-
-
+    
 def OP1(s1: float, s2: float) -> np.float32:
     # s1 + s2
     return s1 + s2
-
 
 def OP2(s1: float, s2: float) -> float:
     # s1 - s2
     return s1 - s2
 
-
 def OP3(s1: float, s2: float) -> float:
     # s1 * s2
     return s1 * s2
-
 
 def OP4(s1: float, s2: float) -> float:
     # s1 / s2
@@ -286,11 +277,9 @@ def OP4(s1: float, s2: float) -> float:
         raise (inputError("Divisor cannot be 0"))
     return s1 / s2
 
-
 def OP5(s: float) -> float:
     # |s|
     return abs(s)
-
 
 def OP6(s: float) -> float:
     # 1/s
@@ -298,21 +287,17 @@ def OP6(s: float) -> float:
         raise (inputError("Cannot inverse 0"))
     return 1 / s
 
-
 def OP7(s: float) -> np.float32:
     # sin(s)
     return np.sin(s)
-
 
 def OP8(s: float) -> np.float32:
     # cos(s)
     return np.cos(s)
 
-
 def OP9(s: float) -> np.float32:
     # tan(s)
     return np.tan(s)
-
 
 def OP10(s: float) -> np.float32:
     # arcsin(s)
@@ -320,23 +305,19 @@ def OP10(s: float) -> np.float32:
         raise (inputError("Input must be in the range [-1,1]"))
     return np.arcsin(s)
 
-
 def OP11(s: float) -> np.float32:
     # arccos(s)
     if abs(s) > 1:
         raise (inputError("Input must be in the range [-1,1]"))
     return np.arccos(s)
 
-
 def OP12(s: float) -> np.float32:
     # arctan(s)
     return np.arctan(s)
 
-
 def OP13(s: float) -> np.float32:
     # e^s
     return np.exp(s)
-
 
 def OP14(s: float) -> np.float32:
     # ln(s)
@@ -344,32 +325,26 @@ def OP14(s: float) -> np.float32:
         raise (inputError("Input must be positive"))
     return np.log(s)
 
-
 def OP15(s: float) -> np.float32:
     # heaviside(s) for float
     return max(np.sign(s), 0)
-
 
 def OP16(v: np.ndarray) -> np.ndarray:
     # heaviside(v) for np.ndarray
     return np.heaviside(v, 0)
 
-
 def OP17(m: np.ndarray) -> np.ndarray:
     # heaviside(m) for np.ndarray
     return np.heaviside(m, 0)
-
 
 def OP18(s: float, v: np.ndarray) -> np.ndarray:
     # s*v
     return s * v
 
-
 def OP19(s: float, i: int) -> np.ndarray:
     # v = bcast(s): float to np.ndarray
     # i: length of np.ndarray output
     return np.array([s] * i)
-
 
 def OP20(v: np.ndarray) -> np.ndarray:
     # 1/v: inverse of np.ndarray
@@ -377,16 +352,13 @@ def OP20(v: np.ndarray) -> np.ndarray:
         raise (inputError("Element cannot be 0"))
     return 1 / v
 
-
 def OP21(v: np.ndarray) -> np.float32:
     # ||v||
     return np.linalg.norm(v)
 
-
 def OP22(v: np.ndarray) -> np.ndarray:
     # |v|
     return abs(v)
-
 
 def OP23(v1: np.ndarray, v2: np.ndarray) -> np.ndarray:
     # v1+v2
@@ -394,20 +366,17 @@ def OP23(v1: np.ndarray, v2: np.ndarray) -> np.ndarray:
         raise inputError("np.ndarrays input must have the same size")
     return v1 + v2
 
-
 def OP24(v1: np.ndarray, v2: np.ndarray) -> np.ndarray:
     # v1-v2
     if len(v1) != len(v2):
         raise inputError("np.ndarrays input must have the same size")
     return v1 - v2
 
-
 def OP25(v1: np.ndarray, v2: np.ndarray) -> np.ndarray:
     # v1*v2
     if len(v1) != len(v2):
         raise inputError("np.ndarrays input must have the same size")
     return v1 * v2
-
 
 def OP26(v1: np.ndarray, v2: np.ndarray) -> np.ndarray:
     # v1/v2
@@ -417,23 +386,19 @@ def OP26(v1: np.ndarray, v2: np.ndarray) -> np.ndarray:
         raise inputError("Divisor input cannot be 0")
     return v1 / v2
 
-
 def OP27(v1: np.ndarray, v2: np.ndarray) -> np.ndarray:
     # dot product of 2 np.ndarrays
     if len(v1) != len(v2):
         raise inputError("np.ndarrays input must have the same size")
     return np.dot(v1, v2)
 
-
 def OP28(v1: np.ndarray, v2: np.ndarray) -> np.ndarray:
     # outer product
     return np.outer(v1, v2)
 
-
 def OP29(s: float, m: np.ndarray) -> np.ndarray:
     # s*m
     return s * m
-
 
 def OP30(m: np.ndarray) -> np.ndarray:
     # 1/m
@@ -441,20 +406,17 @@ def OP30(m: np.ndarray) -> np.ndarray:
         raise (inputError("Element cannot be 0"))
     return 1 / m
 
-
 def OP31(m: np.ndarray, v: np.ndarray) -> np.ndarray:
     # dot(m, v)
     if m.shape[1] != len(v):
         raise inputError("np.ndarray input must have the same size as row size of np.ndarray")
     return np.dot(m, v)
 
-
 def OP32(v: np.ndarray, i: int) -> np.ndarray:
     # [[1, 2, 3, 4],
     # [1, 2, 3, 4],
     # [1, 2, 3, 4]]
     return np.array([v] * i)
-
 
 def OP33(v: np.ndarray, j: int) -> np.ndarray:
     # [[1, 1, 1],
@@ -463,31 +425,25 @@ def OP33(v: np.ndarray, j: int) -> np.ndarray:
     # [4, 4, 4]]
     return np.transpose(np.array([v] * j))
 
-
 def OP34(m: np.ndarray) -> np.float32:
     # ||m||
     return np.linalg.norm(m)
-
 
 def OP35(m: np.ndarray) -> np.ndarray:
     # v[i] = norm(m[i,])
     return np.linalg.norm(m, axis=1)
 
-
 def OP36(m: np.ndarray) -> np.ndarray:
     # v[j] = norm(m[,j])
     return np.linalg.norm(m, axis=0)
-
 
 def OP37(m: np.ndarray) -> np.ndarray:
     # transpose(m)
     return np.transpose(m)
 
-
 def OP38(m: np.ndarray) -> np.float32:
     # |m|
     return abs(m)
-
 
 def OP39(m1: np.ndarray, m2: np.ndarray) -> np.ndarray:
     # m1+m2
@@ -495,20 +451,17 @@ def OP39(m1: np.ndarray, m2: np.ndarray) -> np.ndarray:
         raise inputError("Matrices must have the same size")
     return m1 + m2
 
-
 def OP40(m1: np.ndarray, m2: np.ndarray) -> np.ndarray:
     # m1-m2
     if m1.shape != m2.shape:
         raise inputError("Matrices must have the same size")
     return m1 - m2
 
-
 def OP41(m1: np.ndarray, m2: np.ndarray) -> np.ndarray:
     # m1*m2
     if m1.shape != m2.shape:
         raise inputError("Matrices must have the same size")
     return m1 * m2
-
 
 def OP42(m1: np.ndarray, m2: np.ndarray) -> np.ndarray:
     # m1/m2
@@ -518,16 +471,13 @@ def OP42(m1: np.ndarray, m2: np.ndarray) -> np.ndarray:
         raise (inputError("Element cannot be 0"))
     return m1 / m2
 
-
 def OP43(m1: np.ndarray, m2: np.ndarray) -> np.ndarray:
     # matmul(m1, m2)
     return np.matmul(m1, m2)
 
-
 def OP44(s1: float, s2: float) -> float:
     # min(s1, s2)
     return min(s1, s2)
-
 
 def OP45(v1: np.ndarray, v2: np.ndarray) -> np.ndarray:
     # min(v1, v2)
@@ -535,18 +485,15 @@ def OP45(v1: np.ndarray, v2: np.ndarray) -> np.ndarray:
         raise inputError("np.ndarrays must have the same size")
     return np.minimum(v1, v2)
 
-
 def OP46(m1: np.ndarray, m2: np.ndarray) -> np.ndarray:
     # min(m1, m2)
     if m1.shape != m2.shape:
         raise inputError("Matrices must have the same shape")
     return np.minimum(m1, m2)
 
-
 def OP47(s1: float, s2: float) -> float:
     # max(s1, s2)
     return (max(s1, s2))
-
 
 def OP48(v1: np.ndarray, v2: np.ndarray) -> np.ndarray:
     # max(v1, v2)
@@ -554,73 +501,59 @@ def OP48(v1: np.ndarray, v2: np.ndarray) -> np.ndarray:
         raise inputError("np.ndarrays must have the same size")
     return np.maximum(v1, v2)
 
-
 def OP49(m1: np.ndarray, m2: np.ndarray) -> np.ndarray:
     # max(m1, m2)
     if m1.shape != m2.shape:
         raise inputError("Matrices must have the same shape")
     return (np.maximum(m1, m2))
 
-
 def OP50(v: np.ndarray) -> np.float32:
     # mean(v)
     return np.mean(v)
-
 
 def OP51(m: np.ndarray) -> np.float32:
     # mean(m)
     return np.mean(m)
 
-
 def OP52(m: np.ndarray) -> np.ndarray:
     # np.ndarray mean of each row
     return np.mean(m, axis=1)
-
 
 def OP53(m: np.ndarray) -> np.ndarray:
     # np.ndarray std of each row
     return np.std(m, axis=1)
 
-
 def OP54(v: np.ndarray) -> np.float32:
     # std of np.ndarray
     return np.std(v)
-
 
 def OP55(m: np.ndarray) -> np.float32:
     # std of np.ndarray
     return np.std(m)
 
-
 def OP56(const: float) -> float:
     # Initiate constant float
     return const
-
 
 def OP57(const: float, i: int) -> np.ndarray:
     # Initiate constant np.ndarray
     return np.array([const] * i)
 
-
 def OP58(const: float, i: int, j: int) -> np.ndarray:
     # Initiate constant np.ndarray
     return ([[const] * j] * i)
-
 
 def OP59(a: float = -1, b: float = 1) -> float:
     # generate a random float from uniform(a, b)
     return np.random.uniform(low=min(a, b), high=max(a, b))
 
-
 def OP60(a: float, b: float, i: int) -> np.ndarray:
     # generate a random np.ndarray from uniform(a, b)
     return np.random.uniform(low=min(a, b), high=max(a, b), size=(i,))
 
-
 def OP61(a: float, b: float, i: int, j: int) -> np.ndarray:
     # generate a random np.ndarray from uniform(a, b)
     return np.random.uniform(low=min(a, b), high=max(a, b), size=(i, j))
-
 
 def OP62(mean: float = 0, std: float = 1) -> float:
     # generate a random float from normal distribution
@@ -628,13 +561,11 @@ def OP62(mean: float = 0, std: float = 1) -> float:
         raise inputError("Standard deviation cannot be negative")
     return np.random.normal(loc=mean, scale=std)
 
-
 def OP63(mean: float, std: float, i: int) -> np.ndarray:
     # generate a random np.ndarray from normal distribution
     if std < 0:
         raise inputError("Standard deviation cannot be negative")
     return np.random.normal(loc=mean, scale=std, size=(i,))
-
 
 def OP64(mean: float, std: float, i: int, j: int) -> np.ndarray:
     # generate a random np.ndarray from normal distribution
@@ -642,26 +573,22 @@ def OP64(mean: float, std: float, i: int, j: int) -> np.ndarray:
         raise inputError("Standard deviation cannot be negative")
     return np.random.normal(loc=mean, scale=std, size=(i, j))
 
-
 def OP65(array: list) -> list:
     array = np.array(array)
     array = rankdata(array)
     return list(array)
-
 
 def OP66(array: list) -> list:
     array = np.array(array)
     array = rankdata(array)
     return list(array)
 
-
 def OP67(array: list) -> list:
     array = np.array(array)
-    array = array - sum(array) / len(array)
+    array = array - sum(array)/len(array)
     return list(array)
 
-
-OP_dict = {1: OP1,
+OP_dict = {1: OP1, 
            2: OP2,
            3: OP3,
            4: OP4,
@@ -671,7 +598,7 @@ OP_dict = {1: OP1,
            8: OP8,
            9: OP9,
            10: OP10,
-           11: OP11,
+           11: OP11, 
            12: OP12,
            13: OP13,
            14: OP14,
@@ -681,7 +608,7 @@ OP_dict = {1: OP1,
            18: OP18,
            19: OP19,
            20: OP20,
-           21: OP21,
+           21: OP21, 
            22: OP22,
            23: OP23,
            24: OP24,
@@ -691,7 +618,7 @@ OP_dict = {1: OP1,
            28: OP28,
            29: OP29,
            30: OP30,
-           31: OP31,
+           31: OP31, 
            32: OP32,
            33: OP33,
            34: OP34,
@@ -701,7 +628,7 @@ OP_dict = {1: OP1,
            38: OP38,
            39: OP39,
            40: OP40,
-           41: OP41,
+           41: OP41, 
            42: OP42,
            43: OP43,
            44: OP44,
@@ -711,7 +638,7 @@ OP_dict = {1: OP1,
            48: OP48,
            49: OP49,
            50: OP50,
-           51: OP51,
+           51: OP51, 
            52: OP52,
            53: OP53,
            54: OP54,
@@ -721,34 +648,27 @@ OP_dict = {1: OP1,
            58: OP58,
            59: OP59,
            60: OP60,
-           61: OP61,
+           61: OP61, 
            62: OP62,
            63: OP63,
            64: OP64,
            65: OP65,
            66: OP66,
-           67: OP67}
-
+           67: OP67 }
 
 def executeOperation(operation: list):
-    Output, op, Inputs = operation
+    Output, op, Inputs = operation 
     OP = OP_dict[op]
     if op <= 55 and op not in [19, 32, 33]:
         for i, symbol in enumerate(symbolList):
             if len(Inputs) == 1:
                 operandsValues[Output][i] = OP(np.array(operandsValues[Inputs[0]][i]))
             elif len(Inputs) == 2:
-                operandsValues[Output][i] = OP(np.array(operandsValues[Inputs[0]][i]),
-                                               np.array(operandsValues[Inputs[1]][i]))
+                operandsValues[Output][i] = OP(np.array(operandsValues[Inputs[0]][i]), np.array(operandsValues[Inputs[1]][i]))
             elif len(Inputs) == 3:
-                operandsValues[Output][i] = OP(np.array(operandsValues[Inputs[0]][i]),
-                                               np.array(operandsValues[Inputs[1]][i]),
-                                               np.array(operandsValues[Inputs[2]][i]))
+                operandsValues[Output][i] = OP(np.array(operandsValues[Inputs[0]][i]), np.array(operandsValues[Inputs[1]][i]), np.array(operandsValues[Inputs[2]][i]))
             elif len(Inputs) == 4:
-                operandsValues[Output][i] = OP(np.array(operandsValues[Inputs[0]][i]),
-                                               np.array(operandsValues[Inputs[1]][i]),
-                                               np.array(operandsValues[Inputs[2]][i]),
-                                               np.array(operandsValues[Inputs[3]][i]))
+                operandsValues[Output][i] = OP(np.array(operandsValues[Inputs[0]][i]), np.array(operandsValues[Inputs[1]][i]), np.array(operandsValues[Inputs[2]][i]), np.array(operandsValues[Inputs[3]][i]))
     elif op in [19, 32, 33]:
         for i, symbol in enumerate(symbolList):
             operandsValues[Output][i] = OP(np.array(operandsValues[Inputs[0]][i]), Inputs[1])
@@ -764,19 +684,12 @@ def executeOperation(operation: list):
                 operandsValues[Output][i] = OP(Inputs[0], Inputs[1], Inputs[2], Inputs[3])
     elif 65 <= op <= 67:
         operandsValues[Output] = OP(operandsValues[Inputs[0]])
-
-
+    
 def EMA(series: pd.Series, window: int):
     return series.ewm(window).mean()
-
-
 def ESTD(series: pd.Series, window: int):
     return series.ewm(window).std()
-
-
 def SMA(series: pd.Series, window: int):
     return series.rolling(window).mean()
-
-
 def STD(series: pd.Series, window: int):
     return series.rolling(window).std()
