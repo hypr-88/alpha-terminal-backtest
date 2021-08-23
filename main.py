@@ -136,6 +136,7 @@ def processData(raw_df):
     raw_df.rename(
         columns={'Time': 'time', 'Open': 'open', 'Close': 'close', 'High': 'high', 'Low': 'low', 'Volume': 'volume'},
         inplace=True)
+    raw_df['time'] = pd.to_datetime(raw_df['time'])
     df = pd.DataFrame()
     df['open'] = raw_df.groupby(pd.Grouper(key = 'time', freq = '10min'))['open'].first()
     df['high'] = raw_df.groupby(pd.Grouper(key = 'time', freq = '10min'))['high'].max()
