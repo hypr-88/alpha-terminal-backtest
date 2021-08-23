@@ -1,16 +1,10 @@
-'''backtest
-start: 2021-01-01 00:00:00
-end: 2021-06-27 00:00:00
-period: 1d
-basePeriod: 1d
-exchanges: [{"eid":"Binance","currency":"BTC_USDT","stocks":1000000},{"eid":"Binance","currency":"EOS_USDT","stocks":1000000},{"eid":"Binance","currency":"ETH_USDT","stocks":1000000},{"eid":"Binance","currency":"LTC_USDT","stocks":1000000}]
-args: [["name","abcde"]]
-'''
 import pandas as pd
 import numpy as np
 from scipy.stats import rankdata
 import requests
-np.random.seed(2021)
+import talib
+from arch import arch_model
+#np.random.seed(2021)
 '''
 Notes: s stands for float, v stands for np.ndarray, m stands for np.ndarray
 Definition of 67 functions of operations:
@@ -101,7 +95,7 @@ class Alpha():
         
     def extractInput(self):
         '''request API here and update attribute'''
-        url = 'http://54.199.171.116/api/alpha'
+        url = 'http://13.113.253.201/api/alpha'
         
         payload = {'name': name}
         
@@ -127,43 +121,65 @@ windowSize = alpha.windowSize
 operations = alpha.operations
 operandsValues = alpha.operandsValues
 symbolList = alpha.symbolList
-featuresList = ['open', 'high', 'low', 'close', 'volume', 'EMA5', 'EMA10', 'EMA20', 'EMA30', 'STD5', 'STD10', 'STD20',
-                'STD30']  
+featuresList = ['open', 'high', 'low', 'close', 'volume', 'VWAP', 'open_return', 'high_return', 'low_return', 'close_return', 
+                'log volume', 'log volatility', 'open-close', 'log high-low', 'EMA5', 'EMA10', 'EMA20', 'EMA30', 'STD5', 'STD10', 'STD20', 'STD30', 
+                'BB high', 'BB mid', 'BB low', 'MACD fast', 'MACD slow', 'MACD'] 
 initialBalance = exchange.GetAccount()['Balance']/len(symbolList)
 initialStocks = [ex.GetAccount()['Stocks'] for ex in exchanges]
 
 def getData(ex):
-    df = pd.DataFrame(ex.GetRecords(PERIOD_D1))
+    df = pd.DataFrame(ex.GetRecords(PERIOD_M1))
     return df
 
-def processData(df):
-    df.drop('OpenInterest', axis=1, inplace=True)
-    df.rename(
+def processData(raw_df):
+    raw_df.drop('OpenInterest', axis=1, inplace=True)
+    raw_df.rename(
         columns={'Time': 'time', 'Open': 'open', 'Close': 'close', 'High': 'high', 'Low': 'low', 'Volume': 'volume'},
         inplace=True)
+    df = pd.DataFrame()
+    df['open'] = raw_df.groupby(pd.Grouper(key = 'time', freq = '10min'))['open'].first()
+    df['high'] = raw_df.groupby(pd.Grouper(key = 'time', freq = '10min'))['high'].max()
+    df['low'] = raw_df.groupby(pd.Grouper(key = 'time', freq = '10min'))['low'].min()
+    df['close'] = raw_df.groupby(pd.Grouper(key = 'time', freq = '10min'))['close'].last()
+    df['volume'] = raw_df.groupby(pd.Grouper(key = 'time', freq = '10min'))['volume'].sum()
+                    
+    raw_df['vol x close'] = df['close']*df['volume']
+    df['VWAP'] = raw_df.groupby(pd.Grouper(key = 'time', freq = '10min'))['vol x close'].sum()/new_df['volume']
+    df.dropna(inplace = True)
+    
+    df['open_return'] = df['open']/df['open'].shift(1) - 1
+    df['high_return'] = df['high']/df['high'].shift(1) - 1
+    df['low_return'] = df['low']/df['low'].shift(1) - 1
+    df['close_return'] = df['close']/df['close'].shift(1) - 1
+    df['log volume'] = np.log(df['volume'])
+    df['log volatility'] = Volatility(df['close_return'].iloc[1:])
+    df['log high-low'] = np.log(df['high'] - df['low'])
+    df['open-close'] = (df['open'] - df['close'])
     df['EMA5'] = EMA(df['close'], 5)
     df['EMA10'] = EMA(df['close'], 10)
     df['EMA20'] = EMA(df['close'], 20)
     df['EMA30'] = EMA(df['close'], 30)
-    df['STD5'] = ESTD(df['close'], 5)
-    df['STD10'] = ESTD(df['close'], 10)
-    df['STD20'] = ESTD(df['close'], 20)
-    df['STD30'] = ESTD(df['close'], 30)
+    df['STD5'] = ESTD(df['close_return'], 5)
+    df['STD10'] = ESTD(df['close_return'], 10)
+    df['STD20'] = ESTD(df['close_return'], 20)
+    df['STD30'] = ESTD(df['close_return'], 30)
+    df['BB high'], df['BB mid'], df['BB low'] = BBANDS(df['close'], 20, 2, 2)
+    df['MACD fast'], df['MACD slow'], df['MACD'] = MACD(df['close'], 12, 26, 9)
     
     # normalize
     for col in featuresList:
         df[col] /= df[col].max(skipna=True)
     
     df.dropna(inplace = True)
-    
-    return df[featuresList]
+    return df
 
 def createWindow(df: pd.DataFrame):
     if len(df.index) < windowSize:
         return None
     x = df.iloc[-windowSize:]
-    return np.array(x, dtype=np.float32)
-
+    y = df['close'].iloc[-1]/df['close'].iloc[-2] - 1
+    return np.array(x, dtype=np.float32), np.array(y, dtype=np.float32)
+    
 def addM0(data):
     for i, symbol in enumerate(symbolList):
         operandsValues['m0'][i] = data[symbol]
@@ -215,12 +231,14 @@ def onTick():
         ex = exchanges[i]
         dat = getData(ex)
         dat = processData(dat)
-        dat = createWindow(dat)
+        dat, y = createWindow(dat)
         if dat is None:
             return
         else: 
             data[symbol] = dat
-    
+            #add S0
+            operandsValues['s0'][i] = y
+            
     addM0(data)
     predict()
     weights = allocateWeights(operandsValues['s1'])
@@ -230,7 +248,7 @@ def onTick():
 def main():
     while True:
         onTick()
-        Sleep(86399200) #sleep for 1 day
+        Sleep(int(86399200/24/6)) #sleep for 1 day
 
 
         
@@ -302,13 +320,13 @@ def OP9(s: float) -> np.float32:
 def OP10(s: float) -> np.float32:
     # arcsin(s)
     if abs(s) > 1:
-        raise (inputError("Input must be in the range [-1,1]"))
+        s = np.sign(s)
     return np.arcsin(s)
 
 def OP11(s: float) -> np.float32:
     # arccos(s)
     if abs(s) > 1:
-        raise (inputError("Input must be in the range [-1,1]"))
+        s = np.sign(s)
     return np.arccos(s)
 
 def OP12(s: float) -> np.float32:
@@ -685,11 +703,37 @@ def executeOperation(operation: list):
     elif 65 <= op <= 67:
         operandsValues[Output] = OP(operandsValues[Inputs[0]])
     
+
 def EMA(series: pd.Series, window: int):
-    return series.ewm(window).mean()
+    return talib.EMA(series, timeperiod=window)
+
+
 def ESTD(series: pd.Series, window: int):
     return series.ewm(window).std()
+
+
 def SMA(series: pd.Series, window: int):
-    return series.rolling(window).mean()
+    return talib.SMA(series, timeperiod=window)
+
+
 def STD(series: pd.Series, window: int):
-    return series.rolling(window).std()
+    return talib.STDDEV(series, timeperiod=window)
+
+
+def MACD(series: pd.Series, fastperiod: int, slowperiod: int, signalperiod: int):
+    return talib.MACD(series, fastperiod=fastperiod, slowperiod=slowperiod, signalperiod=signalperiod)
+
+
+def RSI(series: pd.Series, window: int):
+    return talib.RSI(series, timeperiod=window)
+
+
+def BBANDS(series: pd.Series, window: int, nbdevup: int, nbdevdn: int):
+    return talib.BBANDS(series, timeperiod=window, nbdevup=nbdevup, nbdevdn=nbdevdn, matype=0)
+
+
+def Volatility(returns: pd.Series):
+    new_returns = 100*returns # convert returns to %. For convergence purpose of the algorithm
+    model = arch_model(new_returns, vol='GARCH', p=1, o=1, q=1, dist='normal')
+    result = model.fit()
+    return result.conditional_volatility
