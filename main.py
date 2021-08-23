@@ -144,7 +144,7 @@ def processData(raw_df):
     df['volume'] = raw_df.groupby(pd.Grouper(key = 'time', freq = '10min'))['volume'].sum()
                     
     raw_df['vol x close'] = df['close']*df['volume']
-    df['VWAP'] = raw_df.groupby(pd.Grouper(key = 'time', freq = '10min'))['vol x close'].sum()/new_df['volume']
+    df['VWAP'] = raw_df.groupby(pd.Grouper(key = 'time', freq = '10min'))['vol x close'].sum()/df['volume']
     df.dropna(inplace = True)
     
     df['open_return'] = df['open']/df['open'].shift(1) - 1
