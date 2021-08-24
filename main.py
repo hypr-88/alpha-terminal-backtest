@@ -147,7 +147,7 @@ def processData(raw_df):
     raw_df['vol x close'] = df['close']*df['volume']
     df['VWAP'] = raw_df.groupby(pd.Grouper(key = 'time', freq = '10min'))['vol x close'].sum()/df['volume']
     df.dropna(inplace = True)
-    
+    if len(df.index) < 2*windowSize: return None
     df['open_return'] = df['open']/df['open'].shift(1) - 1
     df['high_return'] = df['high']/df['high'].shift(1) - 1
     df['low_return'] = df['low']/df['low'].shift(1) - 1
@@ -232,6 +232,7 @@ def onTick():
         ex = exchanges[i]
         dat = getData(ex)
         dat = processData(dat)
+        if dat is None: return
         dat, y = createWindow(dat)
         if dat is None:
             return
